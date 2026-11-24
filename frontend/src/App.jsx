@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
 import "./App.css";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+const API_URL =
+  import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 function App() {
   const [sessionId] = useState(() => crypto.randomUUID());
@@ -21,9 +23,10 @@ function App() {
     if (!text || loading) return;
 
     setInput("");
+
     setMessages((prev) => [
       ...prev,
-      { role: "user", content: text }
+      { role: "user", content: text },
     ]);
 
     setLoading(true);
@@ -31,7 +34,7 @@ function App() {
     try {
       const body = {
         session_id: sessionId,
-        message: text
+        message: text,
       };
 
       if (systemPrompt.trim()) {
@@ -41,9 +44,9 @@ function App() {
       const response = await fetch(`${API_URL}/chat`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
       });
 
       const data = await response.json();
@@ -57,17 +60,16 @@ function App() {
         {
           role: "assistant",
           content: data.reply,
-          metadata: data.metadata
-        }
+          metadata: data.metadata,
+        },
       ]);
-
     } catch (error) {
       setMessages((prev) => [
         ...prev,
         {
           role: "error",
-          content: `Error: ${error.message}`
-        }
+          content: `Error: ${error.message}`,
+        },
       ]);
     } finally {
       setLoading(false);
@@ -89,16 +91,13 @@ function App() {
           <p>Resilient LLM Chat</p>
         </div>
 
-        <span className="status">
-          ● Online
-        </span>
+        <span className="status">● Online</span>
       </header>
 
       <main>
         <div className="system-box">
           <label htmlFor="systemPrompt">
-            System prompt
-            <span> optional</span>
+            System prompt <span>optional</span>
           </label>
 
           <input
@@ -147,12 +146,12 @@ function App() {
                 data-testid="assistant-message"
                 key={index}
               >
-                <div className="assistant-label">
-                  Lyftr AI
-                </div>
+                <div className="assistant-label">Lyftr AI</div>
 
                 <div className="reply">
-                  {message.content}
+                  <ReactMarkdown>
+                    {message.content}
+                  </ReactMarkdown>
                 </div>
 
                 <div className="metadata">

@@ -8,7 +8,10 @@ from litellm import completion
 
 load_dotenv()
 
-MODEL = os.getenv("LLM_MODEL", "gemini/gemini-3-flash-preview")
+MODEL = os.getenv(
+    "LLM_MODEL",
+    "gemini/gemini-3-flash-preview"
+)
 
 API_KEYS = [
     key.strip()
@@ -17,11 +20,33 @@ API_KEYS = [
 ]
 
 ENABLE_FAILURE_SIMULATION = (
-    os.getenv("ENABLE_FAILURE_SIMULATION", "false").lower() == "true"
+    os.getenv(
+        "ENABLE_FAILURE_SIMULATION",
+        "false"
+    ).lower() == "true"
 )
 
-# In-memory response cache
 CACHE = {}
+
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a helpful AI assistant. "
+    "Answer the user's question directly and concisely. "
+    "For simple factual questions, answer in one or two sentences. "
+    "Do not add unrelated information."
+)
+
+
+def prepare_messages(messages):
+    if messages and messages[0].get("role") == "system":
+        return messages
+
+    return [
+        {
+            "role": "system",
+            "content": DEFAULT_SYSTEM_PROMPT
+        },
+        *messages
+    ]
 
 
 def get_cache_key(messages):
@@ -36,7 +61,9 @@ def get_cache_key(messages):
         ensure_ascii=False
     )
 
-    return hashlib.sha256(serialized.encode()).hexdigest()
+    return hashlib.sha256(
+        serialized.encode()
+    ).hexdigest()
 
 
 def parse_failure_header(header_value):
@@ -69,9 +96,10 @@ def parse_failure_header(header_value):
 def generate_reply(messages, simulate_failure=None):
     start_request = time.perf_counter()
 
-    cache_key = get_cache_key(messages)
+    final_messages = prepare_messages(messages)
 
-    # Cache hit
+    cache_key = get_cache_key(final_messages)
+
     if cache_key in CACHE:
         cached = CACHE[cache_key]
 
@@ -100,12 +128,10 @@ def generate_reply(messages, simulate_failure=None):
     for index, api_key in enumerate(API_KEYS):
         key_id = f"key_{index + 1}"
 
-        # Simulated failure
         if "*" in failures or key_id in failures:
-            status = failures.get(key_id, failures.get("*"))
-
-            print(
-                f"Simulating failure for {key_id}: HTTP {status}"
+            status = failures.get(
+                key_id,
+                failures.get("*")
             )
 
             last_error = RuntimeError(
@@ -118,8 +144,10 @@ def generate_reply(messages, simulate_failure=None):
         try:
             response = completion(
                 model=MODEL,
-                messages=messages,
-                api_key=api_key
+                messages=final_messages,
+                api_key=api_key,
+                temperature=0.2,
+                max_tokens=300
             )
 
             latency_ms = int(
@@ -129,11 +157,19 @@ def generate_reply(messages, simulate_failure=None):
             usage = response.usage
 
             input_tokens = int(
-                getattr(usage, "prompt_tokens", 0) or 0
+                getattr(
+                    usage,
+                    "prompt_tokens",
+                    0
+                ) or 0
             )
 
             output_tokens = int(
-                getattr(usage, "completion_tokens", 0) or 0
+                getattr(
+                    usage,
+                    "completion_tokens",
+                    0
+                ) or 0
             )
 
             reply = response.choices[0].message.content
@@ -168,7 +204,6 @@ def generate_reply(messages, simulate_failure=None):
 
             last_error = exc
             fallback_attempts += 1
-            continue
 
     raise RuntimeError(
         "all providers unavailable"
