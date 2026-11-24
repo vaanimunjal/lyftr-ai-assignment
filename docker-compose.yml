@@ -1,0 +1,27 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      LLM_API_KEYS: ${LLM_API_KEYS}
+      DATABASE_URL: sqlite:////data/app.db
+      ALLOWED_ORIGINS: http://localhost:3000
+      ENABLE_FAILURE_SIMULATION: "true"
+      LLM_MODEL: gemini/gemini-3-flash-preview
+    volumes:
+      - lyftr_data:/data
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:8000
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  lyftr_data:
