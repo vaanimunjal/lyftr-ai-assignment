@@ -1,10 +1,11 @@
 import os
 import time
-import hashlib
 import json
 
+import litellm
 from dotenv import load_dotenv
 from litellm import completion
+from litellm.caching.caching import Cache
 
 load_dotenv()
 
@@ -26,14 +27,15 @@ ENABLE_FAILURE_SIMULATION = (
     ).lower() == "true"
 )
 
-CACHE = {}
-
 DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful AI assistant. "
     "Answer the user's question directly and concisely. "
     "For simple factual questions, answer in one or two sentences. "
     "Do not add unrelated information."
 )
+
+# LiteLLM built-in in-memory cache
+litellm.cache = Cache(type="local")
 
 
 def prepare_messages(messages):
@@ -49,23 +51,6 @@ def prepare_messages(messages):
     ]
 
 
-def get_cache_key(messages):
-    payload = {
-        "model": MODEL,
-        "messages": messages
-    }
-
-    serialized = json.dumps(
-        payload,
-        sort_keys=True,
-        ensure_ascii=False
-    )
-
-    return hashlib.sha256(
-        serialized.encode()
-    ).hexdigest()
-
-
 def parse_failure_header(header_value):
     failures = {}
 
@@ -79,7 +64,6 @@ def parse_failure_header(header_value):
             continue
 
         key_id, status = item.split("=", 1)
-
         key_id = key_id.strip()
 
         try:
@@ -93,33 +77,19 @@ def parse_failure_header(header_value):
     return failures
 
 
+def _response_was_cached(response):
+    hidden = getattr(response, "_hidden_params", {}) or {}
+
+    return bool(
+        hidden.get("cache_hit")
+        or hidden.get("cached_response")
+    )
+
+
 def generate_reply(messages, simulate_failure=None):
-    start_request = time.perf_counter()
+    request_start = time.perf_counter()
 
     final_messages = prepare_messages(messages)
-
-    cache_key = get_cache_key(final_messages)
-
-    if cache_key in CACHE:
-        cached = CACHE[cache_key]
-
-        latency_ms = int(
-            (time.perf_counter() - start_request) * 1000
-        )
-
-        return {
-            "reply": cached["reply"],
-            "metadata": {
-                "resolution_source": "LLM_CACHE",
-                "model": cached["model"],
-                "latency_ms": latency_ms,
-                "input_tokens": cached["input_tokens"],
-                "output_tokens": cached["output_tokens"],
-                "key_id": None,
-                "fallback_attempts": 0
-            }
-        }
-
     failures = parse_failure_header(simulate_failure)
 
     last_error = None
@@ -128,10 +98,15 @@ def generate_reply(messages, simulate_failure=None):
     for index, api_key in enumerate(API_KEYS):
         key_id = f"key_{index + 1}"
 
+        # Failure simulation happens before provider call.
         if "*" in failures or key_id in failures:
             status = failures.get(
                 key_id,
                 failures.get("*")
+            )
+
+            print(
+                f"Simulating {status} failure for {key_id}"
             )
 
             last_error = RuntimeError(
@@ -147,54 +122,50 @@ def generate_reply(messages, simulate_failure=None):
                 messages=final_messages,
                 api_key=api_key,
                 temperature=0.2,
-                max_tokens=300
+                max_tokens=300,
+                caching=True
             )
 
             latency_ms = int(
-                (time.perf_counter() - start_request) * 1000
+                (time.perf_counter() - request_start) * 1000
             )
 
             usage = response.usage
 
             input_tokens = int(
-                getattr(
-                    usage,
-                    "prompt_tokens",
-                    0
-                ) or 0
+                getattr(usage, "prompt_tokens", 0) or 0
             )
 
             output_tokens = int(
-                getattr(
-                    usage,
-                    "completion_tokens",
-                    0
-                ) or 0
+                getattr(usage, "completion_tokens", 0) or 0
             )
 
             reply = response.choices[0].message.content
 
-            result = {
+            cache_hit = _response_was_cached(response)
+
+            return {
                 "reply": reply,
                 "metadata": {
-                    "resolution_source": "LIVE_INFERENCE",
+                    "resolution_source": (
+                        "LLM_CACHE"
+                        if cache_hit
+                        else "LIVE_INFERENCE"
+                    ),
                     "model": MODEL,
                     "latency_ms": latency_ms,
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
-                    "key_id": key_id,
-                    "fallback_attempts": fallback_attempts
+                    "key_id": (
+                        None if cache_hit else key_id
+                    ),
+                    "fallback_attempts": (
+                        0
+                        if cache_hit
+                        else fallback_attempts
+                    )
                 }
             }
-
-            CACHE[cache_key] = {
-                "reply": reply,
-                "model": MODEL,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens
-            }
-
-            return result
 
         except Exception as exc:
             print(
